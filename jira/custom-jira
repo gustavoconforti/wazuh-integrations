@@ -1,0 +1,104 @@
+#!/usr/bin/env python3
+
+from datetime import datetime
+import sys
+import json
+import requests
+import logging
+
+# Set your Jira hook URL and authentication header
+hook_url = "https://your.atlassian.net/rest/api/3/issue"
+headers = {
+    'Content-Type': 'application/json',
+    'Authorization': 'Basic XXXX=='  # Replace XXXX== with your actual authentication header
+}
+
+# Configure logging to a file
+logging.basicConfig(filename='/tmp/jira_integration.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+try:
+    # Read configuration parameters
+    if len(sys.argv) < 2:
+        raise ValueError("Usage: script.py <wazuh_alert_file>")
+
+    wazuh_alert_file = open(sys.argv[1])
+
+    # Read the alert file
+    wazuh_alert_json = json.loads(wazuh_alert_file.read())
+    wazuh_alert_file.close()
+
+    # Extract issue fields
+    wazuh_agent_name = wazuh_alert_json['agent']['name']
+    if 'ip' in wazuh_alert_json['agent']:
+        wazuh_agent_ip = wazuh_alert_json['agent']['ip']
+    elif 'location' in wazuh_alert_json:
+        wazuh_agent_ip = wazuh_alert_json['location']
+    else:
+        wazuh_agent_ip = 'None'
+    wazuh_id = wazuh_alert_json['id']
+    wazuh_rule_description = wazuh_alert_json['rule']['description']
+    wazuh_rule_level = wazuh_alert_json['rule']['level']
+    wazuh_rule_mitre_id = wazuh_alert_json['rule']['mitre']['id'][0]
+    wazuh_alert_payload = json.dumps(wazuh_alert_json, indent=4)
+
+    # Generate request
+    payload = {  # IMPORTANT: This below is a sample payload. If in doubt about customization, refer to ./README.md
+        "fields": {
+            "customfield_10078": wazuh_agent_name,
+            "customfield_10079": wazuh_agent_ip,
+            "customfield_10076": "https://192.168.0.1/app/wazuh#",
+            "customfield_10077": wazuh_id,
+            "customfield_10080": wazuh_rule_level,
+            "customfield_10071": {
+                "value": wazuh_rule_mitre_id
+            },
+            "issuetype": {
+                "name": "Alert"
+            },
+            "project": {
+                "key": "SOC"
+            },
+            "summary": wazuh_rule_description,
+            "description": {
+                "version": 1,
+                "type": "doc",
+                "content": [
+                    {
+                        "type": "paragraph",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "Alert details below."
+                            }
+                        ]
+                    },
+                    {
+                        "type": "codeBlock",
+                        "attrs": {},
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": wazuh_alert_payload
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+    }
+
+    response = requests.post(hook_url, headers=headers, json=payload)
+    response_text = response.text
+
+    # Logging
+    epoch_time = datetime.now()
+    readable_time = epoch_time.strftime("%m-%d-%Y %H:%M:%S")
+    log_text = f"{readable_time} -\nRequest:\n\n{json.dumps(payload, indent=4)}\n\nResponse:\n\n{response_text}\n\n"
+    logging.info(log_text)
+
+    sys.exit(0)
+
+except Exception as e:
+    # Handle exceptions and log errors
+    logging.error(f"An error occurred: {str(e)}")
+    sys.exit(1)
