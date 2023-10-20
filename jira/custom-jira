@@ -6,15 +6,62 @@ import json
 import requests
 import logging
 
-# Set your Jira hook URL and authentication header
-hook_url = "https://your.atlassian.net/rest/api/3/issue"
+# ====== CUSTOM PARAMETERS =======
+
+wazuh_fqdn= "wazuh.contoso.com"
+jira_fqdn = "your.atlassian.net"
+project_key = "SOC"
 headers = {
     'Content-Type': 'application/json',
-    'Authorization': 'Basic XXXX=='  # Replace XXXX== with your actual authentication header
+    'Authorization': 'Basic QWERTYUIOPASDFGHJKLZXCVBNM=='
 }
+log_path = '/tmp/jira_integration.log'
+
+
+# === END OF CUSTOM PARAMETERS ===
+
+
+# ========== ATTENTION ==========
+
+# This is a sample Jira API payload that will NOT work for you out of the box.
+# You MUST edit it according to your own Jira configurations.
+
+# Jira payload declaration
+def create_jira_payload(has_similar_issue, wazuh_agent_name, wazuh_agent_ip, wazuh_id, wazuh_rule_level, wazuh_rule_mitre_ids, wazuh_rule_mitre_names, wazuh_rule_mitre_tactics, issue_key, wazuh_rule_description, wazuh_alert_payload):
+    payload = {
+        "fields": {
+            "customfield_10045": wazuh_agent_name,
+            "customfield_10046": wazuh_agent_ip,
+            "customfield_10043": f"https://{wazuh_fqdn}/app/wazuh#",
+            "customfield_10044": wazuh_id,
+            "customfield_10041": wazuh_rule_level,
+            "customfield_10055": [{"value": id} for id in wazuh_rule_mitre_ids],
+            "customfield_10056": [{"value": name} for name in wazuh_rule_mitre_names],
+            "customfield_10057": [{"value": tactic} for tactic in wazuh_rule_mitre_tactics],
+            "project": {"key": project_key},
+            "summary": wazuh_rule_description,
+            "description": {
+                "version": 1,
+                "type": "doc",
+                "content": [
+                    {"type": "paragraph", "content": [{"type": "text", "text": "Alert details below."}]},
+                    {"type": "codeBlock", "attrs": {"language": "json"}, "content": [{"type": "text", "text": wazuh_alert_payload}]}
+                ]
+            }
+        }
+    }
+    if has_similar_issue:
+        payload["fields"]["issuetype"] = {"name": "Subalert"}
+        payload["fields"]["parent"] = {"key": issue_key}
+    else:
+        payload["fields"]["issuetype"] = {"name": "Alert"}
+    return payload
+
+# Setup issue creation hook
+hook_url = f"https://{jira_fqdn}/rest/api/3/issue"
 
 # Configure logging to a file
-logging.basicConfig(filename='/tmp/jira_integration.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(filename=log_path, level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 try:
     # Read configuration parameters
@@ -38,56 +85,51 @@ try:
     wazuh_id = wazuh_alert_json['id']
     wazuh_rule_description = wazuh_alert_json['rule']['description']
     wazuh_rule_level = wazuh_alert_json['rule']['level']
-    wazuh_rule_mitre_id = wazuh_alert_json['rule']['mitre']['id'][0]
+    wazuh_rule_mitre_ids = wazuh_alert_json['rule']['mitre']['id']
+    wazuh_rule_mitre_names = wazuh_alert_json['rule']['mitre']['technique']
+    wazuh_rule_mitre_tactics = wazuh_alert_json['rule']['mitre']['tactic']
     wazuh_alert_payload = json.dumps(wazuh_alert_json, indent=4)
 
-    # Generate request
-    payload = {  # IMPORTANT: This below is a sample payload. If in doubt about customization, refer to ./README.md
-        "fields": {
-            "customfield_10078": wazuh_agent_name,
-            "customfield_10079": wazuh_agent_ip,
-            "customfield_10076": "https://192.168.0.1/app/wazuh#",
-            "customfield_10077": wazuh_id,
-            "customfield_10080": wazuh_rule_level,
-            "customfield_10071": {
-                "value": wazuh_rule_mitre_id
-            },
-            "issuetype": {
-                "name": "Alert"
-            },
-            "project": {
-                "key": "SOC"
-            },
-            "summary": wazuh_rule_description,
-            "description": {
-                "version": 1,
-                "type": "doc",
-                "content": [
-                    {
-                        "type": "paragraph",
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": "Alert details below."
-                            }
-                        ]
-                    },
-                    {
-                        "type": "codeBlock",
-                        "attrs": {},
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": wazuh_alert_payload
-                            }
-                        ]
-                    }
-                ]
-            }
-        }
-    }
+    # Check if a similar issue exists
+    jql_url = f"https://{jira_fqdn}/rest/api/2/search?jql=project = {project_key} AND resolution = Unresolved AND issuetype = Alert AND summary ~ '{wazuh_rule_description}'"
+    jql_response = requests.get(jql_url, headers=headers)
+    jql_json = jql_response.json()
 
-    response = requests.post(hook_url, headers=headers, json=payload)
+    # Generate request
+    if jql_json['total'] == 0:
+
+        # Create Alert issue if similar issue DOES NOT EXIST
+
+        #{
+        #   "startAt": 0,
+        #   "maxResults": 50,
+        #   "total": 0,
+        #   "issues": []
+        #}
+
+        payload = create_jira_payload(False, wazuh_agent_name, wazuh_agent_ip, wazuh_id, wazuh_rule_level, wazuh_rule_mitre_ids, wazuh_rule_mitre_names, wazuh_rule_mitre_tactics, None, wazuh_rule_description, wazuh_alert_payload)
+        response = requests.post(hook_url, headers=headers, json=payload)
+    else:
+
+        # Create Subalert issue if similar issue EXISTS
+
+        #{
+        #   "expand": "names,schema",
+        #   "startAt": 0,
+        #   "maxResults": 50,
+        #   "total": 1,
+        #   "issues": [
+        #   {
+        #       "expand": "operations,ver...",
+        #       "id": "10050",
+        #       "self": "https://your.atlassian.net/rest/api/2/issue/10050",
+        #       "key": "KEY-16",
+        # ...
+
+        issue_key = jql_json['issues'][0]['key']
+        payload = create_jira_payload(True, wazuh_agent_name, wazuh_agent_ip, wazuh_id, wazuh_rule_level, wazuh_rule_mitre_ids, wazuh_rule_mitre_names, wazuh_rule_mitre_tactics, issue_key, wazuh_rule_description, wazuh_alert_payload)
+        response = requests.post(hook_url, headers=headers, json=payload)
+
     response_text = response.text
 
     # Logging
