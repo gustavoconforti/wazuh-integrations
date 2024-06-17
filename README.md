@@ -13,10 +13,10 @@ Bellow is a high-level abstraction of which steps take place between data collec
 </p>
 
 1. An event triggers a rule, creating an alert.
-2. The `wazuh_integratord` service listens to all triggered alerts and compares them against existing `integration` blocks in the `ossec.conf` file.
+2. The `wazuh-integratord` service listens to all triggered alerts and compares them against existing `integration` blocks in the `ossec.conf` file.
    1. If the alert meets the requirements of any integration, the processing continues.
    2. If not, the system skips this alert and proceeds to analyze the next one.
-3. The `wazuh_integratord` then creates a temporary file with the data of this alert (e.g., `/tmp/custom-iris-1692926900-1677658861.alert`) and passes this file as a parameter to the ***script*** of integration located in `/var/ossec/integrations/` and having the same name specified in the `integration` block.
+3. The `wazuh-integratord` then creates a temporary file with the data of this alert (e.g., `/tmp/custom-iris-1692926900-1677658861.alert`) and passes this file as a parameter to the ***script*** of integration located in `/var/ossec/integrations/` and having the same name specified in the `integration` block.
 4. The *script* reads the information present in the alert, extracts the necessary data, formats a *payload* following the documented standards of the destination API, and makes an HTTP POST request.
 
 ## Configuration
